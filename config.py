@@ -1,0 +1,22 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+LINKEDIN_EMAIL = os.getenv("LINKEDIN_EMAIL", "")
+LINKEDIN_PASSWORD = os.getenv("LINKEDIN_PASSWORD", "")
+LINKEDIN_JSESSIONID = os.getenv("LINKEDIN_JSESSIONID", "")
+LINKEDIN_LI_AT = os.getenv("LINKEDIN_LI_AT", "")
+
+MIN_DELAY_BETWEEN_ACTIONS = int(os.getenv("MIN_DELAY_BETWEEN_ACTIONS", "45"))
+MAX_DELAY_BETWEEN_ACTIONS = int(os.getenv("MAX_DELAY_BETWEEN_ACTIONS", "120"))
+MIN_DELAY_BETWEEN_MESSAGES = int(os.getenv("MIN_DELAY_BETWEEN_MESSAGES", "60"))
+MAX_DELAY_BETWEEN_MESSAGES = int(os.getenv("MAX_DELAY_BETWEEN_MESSAGES", "180"))
+
+MAX_CONNECTION_REQUESTS_PER_DAY = int(os.getenv("MAX_CONNECTION_REQUESTS_PER_DAY", "20"))
+MAX_MESSAGES_PER_DAY = int(os.getenv("MAX_MESSAGES_PER_DAY", "50"))
+
+CSV_PATH = "Customer influencer reachouts - Raw.csv"
+STATE_FILE = "outreach_state.json"
+
+STORYLANE_COMPANY_ID = "74750266"

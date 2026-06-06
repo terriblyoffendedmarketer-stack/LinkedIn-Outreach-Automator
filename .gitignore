@@ -1,1 +1,9 @@
 .DS_Store
+.env
+__pycache__/
+*.pyc
+outreach_state.json
+outreach_results.csv
+dry_run_results.csv
+venv/
+.venv/
