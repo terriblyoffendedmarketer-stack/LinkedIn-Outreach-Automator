@@ -1,1 +1,5 @@
 .DS_Store
+__pycache__/
+data/state.json
+data/state.json.tmp
+data/debug_page_source.html
