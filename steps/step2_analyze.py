@@ -25,7 +25,11 @@ def parse_count(text: str) -> int:
     return int(num)
 
 
+_profile_debug_saved = False
+
+
 def scrape_profile(page, profile_url: str, limiter: RateLimiter) -> dict:
+    global _profile_debug_saved
     log.info(f"Visiting profile: {profile_url}")
     page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
     limiter.delay("page_navigation")
@@ -38,11 +42,14 @@ def scrape_profile(page, profile_url: str, limiter: RateLimiter) -> dict:
         name_el = page.query_selector("h1")
         if name_el:
             data["name"] = name_el.inner_text().strip()
-    except Exception:
-        pass
+        else:
+            log.warning(f"Name: h1 selector missed on {profile_url}")
+    except Exception as e:
+        log.warning(f"Name: exception on {profile_url}: {e}")
 
     # Headline
-    for sel in [".text-body-medium.break-words", "div.text-body-medium"]:
+    headline_sels = [".text-body-medium.break-words", "div.text-body-medium"]
+    for sel in headline_sels:
         try:
             el = page.query_selector(sel)
             if el:
@@ -50,10 +57,13 @@ def scrape_profile(page, profile_url: str, limiter: RateLimiter) -> dict:
                 break
         except Exception:
             continue
+    if "headline" not in data:
+        log.warning(f"Headline: all selectors missed on {profile_url}")
 
     # Location
-    for sel in [".text-body-small.inline.t-black--light.break-words",
-                "span.text-body-small.inline"]:
+    location_sels = [".text-body-small.inline.t-black--light.break-words",
+                     "span.text-body-small.inline"]
+    for sel in location_sels:
         try:
             el = page.query_selector(sel)
             if el:
@@ -61,6 +71,8 @@ def scrape_profile(page, profile_url: str, limiter: RateLimiter) -> dict:
                 break
         except Exception:
             continue
+    if "location" not in data:
+        log.warning(f"Location: all selectors missed on {profile_url}")
 
     # Follower/connection count from the profile top card
     try:
@@ -70,11 +82,32 @@ def scrape_profile(page, profile_url: str, limiter: RateLimiter) -> dict:
             follower_match = re.search(r"([\d,]+\.?\d*[KkMm]?)\s*followers?", full_text)
             if follower_match:
                 data["follower_count"] = parse_count(follower_match.group(1))
+            else:
+                log.warning(f"Followers: regex missed in top card text on {profile_url}")
             conn_match = re.search(r"([\d,]+\.?\d*[KkMm]?\+?)\s*connections?", full_text)
             if conn_match:
                 data["connection_count"] = parse_count(conn_match.group(1).replace("+", ""))
-    except Exception:
-        pass
+        else:
+            log.warning(f"Followers: top card selectors (.ph5.pb5 / .pv-top-card) missed on {profile_url}")
+    except Exception as e:
+        log.warning(f"Followers: exception on {profile_url}: {e}")
+
+    # Fallback: search full page text for follower/connection counts
+    if "follower_count" not in data or "connection_count" not in data:
+        try:
+            body_text = page.inner_text("body")
+            if "follower_count" not in data:
+                fm = re.search(r"([\d,]+\.?\d*[KkMm]?)\s*followers?", body_text)
+                if fm:
+                    data["follower_count"] = parse_count(fm.group(1))
+                    log.info(f"Followers: found via body text fallback: {data['follower_count']}")
+            if "connection_count" not in data:
+                cm = re.search(r"([\d,]+\.?\d*[KkMm]?\+?)\s*connections?", body_text)
+                if cm:
+                    data["connection_count"] = parse_count(cm.group(1).replace("+", ""))
+                    log.info(f"Connections: found via body text fallback: {data['connection_count']}")
+        except Exception as e:
+            log.warning(f"Body text fallback failed on {profile_url}: {e}")
 
     # Connection status
     try:
@@ -109,6 +142,18 @@ def scrape_profile(page, profile_url: str, limiter: RateLimiter) -> dict:
     except Exception:
         pass
 
+    # Save debug HTML for the first profile so we can inspect the real DOM
+    if not _profile_debug_saved:
+        _profile_debug_saved = True
+        try:
+            html = page.content()
+            with open("data/debug_profile_page.html", "w") as f:
+                f.write(html)
+            log.info(f"Saved debug profile HTML to data/debug_profile_page.html")
+        except Exception:
+            pass
+
+    log.info(f"Profile scrape result for {profile_url}: {list(data.keys())}")
     return data
 
 
