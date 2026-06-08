@@ -37,8 +37,8 @@ def parse_csv() -> list[Candidate]:
         url = (ws.cell(r, 1).value or "").strip()
         if not url.startswith("http"):
             continue
-        note = (ws.cell(r, 2).value or "").strip()
-        req_status = (ws.cell(r, 3).value or "").strip().lower()
+        note = (ws.cell(r, 3).value or "").strip()
+        req_status = (ws.cell(r, 2).value or "").strip().lower()
         if req_status == "company ac":
             continue
         source_type = classify_url(url)
