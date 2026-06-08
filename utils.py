@@ -4,7 +4,7 @@ import logging
 import re
 import sys
 
-from config import CSV_PATH
+from config import XLSX_PATH
 from models import Candidate, CandidateStatus
 
 
@@ -29,26 +29,27 @@ def classify_url(url: str) -> str:
 
 
 def parse_csv() -> list[Candidate]:
+    import openpyxl
+    wb = openpyxl.load_workbook(XLSX_PATH)
+    ws = wb[wb.sheetnames[0]]
     candidates = []
-    with open(CSV_PATH) as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        for row in reader:
-            if not row or not row[0].strip():
-                continue
-            url = row[0].strip()
-            if not url.startswith("http"):
-                continue
-            note = row[2].strip() if len(row) > 2 else ""
-            source_type = classify_url(url)
-            candidates.append(Candidate(
-                id=make_id(url),
-                source_url=url,
-                source_type=source_type,
-                source_note=note,
-                status=CandidateStatus.PENDING_EXTRACT,
-                profile_url=url if source_type == "profile" else None,
-            ))
+    for r in range(2, ws.max_row + 1):
+        url = (ws.cell(r, 1).value or "").strip()
+        if not url.startswith("http"):
+            continue
+        note = (ws.cell(r, 2).value or "").strip()
+        req_status = (ws.cell(r, 3).value or "").strip().lower()
+        if req_status == "company ac":
+            continue
+        source_type = classify_url(url)
+        candidates.append(Candidate(
+            id=make_id(url),
+            source_url=url,
+            source_type=source_type,
+            source_note=note,
+            status=CandidateStatus.PENDING_EXTRACT,
+            profile_url=url if source_type == "profile" else None,
+        ))
     return candidates
 
 

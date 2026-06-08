@@ -3,7 +3,8 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
-CSV_PATH = BASE_DIR / "Customer influencer reachouts - Raw.csv"
+XLSX_PATH = BASE_DIR / "New - Customer influencer reachouts.xlsx"
+CSV_PATH = XLSX_PATH  # legacy alias
 STATE_PATH = DATA_DIR / "state.json"
 SCORED_PATH = DATA_DIR / "candidates_scored.json"
 
