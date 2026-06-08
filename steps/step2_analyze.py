@@ -25,91 +25,164 @@ def parse_count(text: str) -> int:
     return int(num)
 
 
-_profile_debug_saved = False
+def _wait_for_any(page, selectors: list[str], timeout: int = 5000):
+    """Wait for any of the given selectors to appear. Returns the first match or None."""
+    combined = ", ".join(selectors)
+    try:
+        page.wait_for_selector(combined, timeout=timeout, state="attached")
+    except Exception:
+        pass
+
+
+def _query_first(page, selectors: list[str]):
+    """Try each selector in order, return the first element found."""
+    for sel in selectors:
+        try:
+            el = page.query_selector(sel)
+            if el:
+                return el
+        except Exception:
+            continue
+    return None
+
+
+def _save_debug_html(page, profile_url: str, reason: str):
+    try:
+        html = page.content()
+        slug = profile_url.rstrip("/").split("/")[-1]
+        path = f"data/debug_profile_{slug}.html"
+        with open(path, "w") as f:
+            f.write(html)
+        log.warning(f"Saved debug HTML to {path} — reason: {reason}")
+    except Exception as e:
+        log.warning(f"Failed to save debug HTML: {e}")
 
 
 def scrape_profile(page, profile_url: str, limiter: RateLimiter) -> dict:
-    global _profile_debug_saved
     log.info(f"Visiting profile: {profile_url}")
     page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
     limiter.delay("page_navigation")
+
+    # Wait for the page to actually render profile content
+    _wait_for_any(page, [
+        "h1",
+        "section.artdeco-card",
+        ".scaffold-layout__main",
+        ".pv-top-card",
+        "main.scaffold-layout__main",
+    ], timeout=8000)
     page.wait_for_timeout(3000)
 
     data = {}
-
-    # Name
+    body_text = ""
     try:
-        name_el = page.query_selector("h1")
-        if name_el:
-            data["name"] = name_el.inner_text().strip()
-        else:
-            log.warning(f"Name: h1 selector missed on {profile_url}")
+        body_text = page.inner_text("body")
     except Exception as e:
-        log.warning(f"Name: exception on {profile_url}: {e}")
+        log.warning(f"Could not get body text on {profile_url}: {e}")
 
-    # Headline
-    headline_sels = [".text-body-medium.break-words", "div.text-body-medium"]
-    for sel in headline_sels:
-        try:
-            el = page.query_selector(sel)
-            if el:
-                data["headline"] = el.inner_text().strip()
-                break
-        except Exception:
-            continue
+    # --- Name ---
+    name_selectors = [
+        "h1.text-heading-xlarge",
+        "h1.inline.t-24",
+        ".pv-top-card h1",
+        "main h1",
+        "h1",
+    ]
+    name_el = _query_first(page, name_selectors)
+    if name_el:
+        name_text = name_el.inner_text().strip()
+        if name_text and name_text.lower() not in ("linkedin", ""):
+            data["name"] = name_text
+            log.info(f"Name found: {data['name']}")
+    if "name" not in data:
+        log.warning(f"Name: all selectors missed on {profile_url}")
+
+    # --- Headline ---
+    headline_selectors = [
+        ".text-body-medium.break-words",
+        "div.text-body-medium",
+        ".pv-top-card--list .text-body-medium",
+        "h2.text-body-medium",
+    ]
+    headline_el = _query_first(page, headline_selectors)
+    if headline_el:
+        headline_text = headline_el.inner_text().strip()
+        if headline_text:
+            data["headline"] = headline_text
+            log.info(f"Headline found: {data['headline'][:60]}")
     if "headline" not in data:
         log.warning(f"Headline: all selectors missed on {profile_url}")
 
-    # Location
-    location_sels = [".text-body-small.inline.t-black--light.break-words",
-                     "span.text-body-small.inline"]
-    for sel in location_sels:
-        try:
-            el = page.query_selector(sel)
-            if el:
-                data["location"] = el.inner_text().strip()
-                break
-        except Exception:
-            continue
+    # --- Location ---
+    location_selectors = [
+        ".text-body-small.inline.t-black--light.break-words",
+        "span.text-body-small.inline.t-black--light",
+        "span.text-body-small.inline",
+        ".pv-top-card--list .text-body-small",
+    ]
+    location_el = _query_first(page, location_selectors)
+    if location_el:
+        loc_text = location_el.inner_text().strip()
+        if loc_text:
+            data["location"] = loc_text
     if "location" not in data:
         log.warning(f"Location: all selectors missed on {profile_url}")
 
-    # Follower/connection count from the profile top card
-    try:
-        top_text = page.query_selector(".ph5.pb5") or page.query_selector(".pv-top-card")
-        if top_text:
-            full_text = top_text.inner_text()
-            follower_match = re.search(r"([\d,]+\.?\d*[KkMm]?)\s*followers?", full_text)
-            if follower_match:
-                data["follower_count"] = parse_count(follower_match.group(1))
-            else:
-                log.warning(f"Followers: regex missed in top card text on {profile_url}")
-            conn_match = re.search(r"([\d,]+\.?\d*[KkMm]?\+?)\s*connections?", full_text)
-            if conn_match:
-                data["connection_count"] = parse_count(conn_match.group(1).replace("+", ""))
-        else:
-            log.warning(f"Followers: top card selectors (.ph5.pb5 / .pv-top-card) missed on {profile_url}")
-    except Exception as e:
-        log.warning(f"Followers: exception on {profile_url}: {e}")
-
-    # Fallback: search full page text for follower/connection counts
-    if "follower_count" not in data or "connection_count" not in data:
+    # --- Follower/Connection counts ---
+    # Strategy 1: Look for the follower/connection spans in the top card area
+    top_card_selectors = [
+        ".ph5.pb5",
+        ".pv-top-card",
+        "section.artdeco-card",
+        "main",
+    ]
+    top_el = _query_first(page, top_card_selectors)
+    if top_el:
         try:
-            body_text = page.inner_text("body")
-            if "follower_count" not in data:
-                fm = re.search(r"([\d,]+\.?\d*[KkMm]?)\s*followers?", body_text)
-                if fm:
-                    data["follower_count"] = parse_count(fm.group(1))
-                    log.info(f"Followers: found via body text fallback: {data['follower_count']}")
-            if "connection_count" not in data:
-                cm = re.search(r"([\d,]+\.?\d*[KkMm]?\+?)\s*connections?", body_text)
-                if cm:
-                    data["connection_count"] = parse_count(cm.group(1).replace("+", ""))
-                    log.info(f"Connections: found via body text fallback: {data['connection_count']}")
+            top_text = top_el.inner_text()
+            fm = re.search(r"([\d,]+\.?\d*[KkMm]?)\s*followers?", top_text)
+            if fm:
+                data["follower_count"] = parse_count(fm.group(1))
+                log.info(f"Followers (top card): {data['follower_count']}")
+            cm = re.search(r"([\d,]+\.?\d*[KkMm]?\+?)\s*connections?", top_text)
+            if cm:
+                data["connection_count"] = parse_count(cm.group(1).replace("+", ""))
         except Exception as e:
-            log.warning(f"Body text fallback failed on {profile_url}: {e}")
+            log.warning(f"Top card text extraction failed: {e}")
 
-    # Connection status
+    # Strategy 2: Look for specific follower link/span elements
+    if "follower_count" not in data:
+        follower_link_selectors = [
+            'a[href*="/followers/"]',
+            'span:has-text("followers")',
+            'a:has-text("followers")',
+        ]
+        for sel in follower_link_selectors:
+            try:
+                el = page.query_selector(sel)
+                if el:
+                    txt = el.inner_text().strip()
+                    fm = re.search(r"([\d,]+\.?\d*[KkMm]?)", txt)
+                    if fm:
+                        data["follower_count"] = parse_count(fm.group(1))
+                        log.info(f"Followers (link element): {data['follower_count']}")
+                        break
+            except Exception:
+                continue
+
+    # Strategy 3: Body text regex fallback
+    if body_text and "follower_count" not in data:
+        fm = re.search(r"([\d,]+\.?\d*[KkMm]?)\s*followers?", body_text)
+        if fm:
+            data["follower_count"] = parse_count(fm.group(1))
+            log.info(f"Followers (body fallback): {data['follower_count']}")
+    if body_text and "connection_count" not in data:
+        cm = re.search(r"([\d,]+\.?\d*[KkMm]?\+?)\s*connections?", body_text)
+        if cm:
+            data["connection_count"] = parse_count(cm.group(1).replace("+", ""))
+            log.info(f"Connections (body fallback): {data['connection_count']}")
+
+    # --- Connection status ---
     try:
         if page.query_selector('button[aria-label*="Message"]'):
             data["connection_status"] = "connected"
@@ -122,43 +195,48 @@ def scrape_profile(page, profile_url: str, limiter: RateLimiter) -> dict:
     except Exception:
         data["connection_status"] = "unknown"
 
-    # About section
-    try:
-        about_section = page.query_selector("#about ~ .display-flex .inline-show-more-text")
-        if about_section:
-            data["about_snippet"] = about_section.inner_text().strip()[:500]
-    except Exception:
-        pass
+    # --- About section ---
+    about_selectors = [
+        "#about ~ .display-flex .inline-show-more-text",
+        "#about ~ div .inline-show-more-text",
+        'section:has(#about) .inline-show-more-text',
+        "#about + .display-flex span[aria-hidden='true']",
+    ]
+    about_el = _query_first(page, about_selectors)
+    if about_el:
+        try:
+            data["about_snippet"] = about_el.inner_text().strip()[:500]
+        except Exception:
+            pass
 
-    # Experience -> current company/role
-    try:
-        exp_item = page.query_selector("#experience ~ .pvs-list__outer-container li:first-child")
-        if exp_item:
-            exp_text = exp_item.inner_text().strip()
+    # --- Experience -> current company/role ---
+    exp_selectors = [
+        "#experience ~ .pvs-list__outer-container li:first-child",
+        "#experience ~ div .pvs-list__outer-container li:first-child",
+        'section:has(#experience) li:first-child',
+    ]
+    exp_el = _query_first(page, exp_selectors)
+    if exp_el:
+        try:
+            exp_text = exp_el.inner_text().strip()
             lines = [l.strip() for l in exp_text.split("\n") if l.strip()]
             if len(lines) >= 2:
                 data["current_role"] = lines[0]
                 data["current_company"] = lines[1]
-    except Exception:
-        pass
-
-    # Save debug HTML for the first profile so we can inspect the real DOM
-    if not _profile_debug_saved:
-        _profile_debug_saved = True
-        try:
-            html = page.content()
-            with open("data/debug_profile_page.html", "w") as f:
-                f.write(html)
-            log.info(f"Saved debug profile HTML to data/debug_profile_page.html")
         except Exception:
             pass
 
-    log.info(f"Profile scrape result for {profile_url}: {list(data.keys())}")
+    # --- Debug: save HTML if key fields are missing ---
+    missing_keys = [k for k in ("name", "headline", "follower_count") if k not in data]
+    if missing_keys:
+        _save_debug_html(page, profile_url, f"missing: {', '.join(missing_keys)}")
+
+    log.info(f"Profile scrape result for {profile_url}: {data}")
     return data
 
 
 def scrape_recent_posts(page, profile_url: str, limiter: RateLimiter) -> list[PostEngagement]:
-    activity_url = f"{profile_url}/recent-activity/all/"
+    activity_url = f"{profile_url.rstrip('/')}/recent-activity/all/"
     log.info(f"Visiting activity: {activity_url}")
     page.goto(activity_url, wait_until="domcontentloaded", timeout=30000)
     limiter.delay("page_navigation")
@@ -169,29 +247,63 @@ def scrape_recent_posts(page, profile_url: str, limiter: RateLimiter) -> list[Po
     page.wait_for_timeout(2000)
 
     posts = []
-    try:
-        post_elements = page.query_selector_all(".feed-shared-update-v2")[:10]
-        for post_el in post_elements:
-            try:
-                text_el = post_el.query_selector(".feed-shared-text")
-                text_preview = text_el.inner_text().strip()[:200] if text_el else ""
 
-                # Try to get the post URL (activity link)
-                post_url = ""
+    # Try multiple selectors for post containers
+    post_container_selectors = [
+        ".feed-shared-update-v2",
+        "[data-urn*='activity']",
+        ".occludable-update",
+    ]
+    post_elements = []
+    for sel in post_container_selectors:
+        try:
+            post_elements = page.query_selector_all(sel)[:10]
+            if post_elements:
+                log.info(f"Found {len(post_elements)} posts with selector: {sel}")
+                break
+        except Exception:
+            continue
+
+    if not post_elements:
+        log.warning(f"No post elements found on {activity_url}")
+        return posts
+
+    for post_el in post_elements:
+        try:
+            # Post text
+            text_preview = ""
+            text_selectors = [".feed-shared-text", ".update-components-text", "span.break-words"]
+            for sel in text_selectors:
                 try:
-                    link_el = post_el.query_selector('a[href*="/feed/update/"]')
-                    if link_el:
-                        href = link_el.get_attribute("href") or ""
-                        if "/feed/update/" in href:
-                            post_url = href.split("?")[0]
+                    text_el = post_el.query_selector(sel)
+                    if text_el:
+                        text_preview = text_el.inner_text().strip()[:200]
+                        break
                 except Exception:
-                    pass
+                    continue
 
-                likes = 0
-                comments = 0
-                reposts = 0
+            # Post URL
+            post_url = ""
+            try:
+                link_el = post_el.query_selector('a[href*="/feed/update/"]')
+                if link_el:
+                    href = link_el.get_attribute("href") or ""
+                    if "/feed/update/" in href:
+                        post_url = href.split("?")[0]
+            except Exception:
+                pass
 
-                social_counts = post_el.query_selector(".social-details-social-counts")
+            likes = 0
+            comments = 0
+            reposts = 0
+
+            # Engagement counts
+            count_selectors = [
+                ".social-details-social-counts",
+                ".social-details-social-activity",
+            ]
+            for sel in count_selectors:
+                social_counts = post_el.query_selector(sel)
                 if social_counts:
                     counts_text = social_counts.inner_text()
                     like_match = re.search(r"([\d,]+)\s*(?:like|reaction)", counts_text, re.IGNORECASE)
@@ -203,27 +315,26 @@ def scrape_recent_posts(page, profile_url: str, limiter: RateLimiter) -> list[Po
                     repost_match = re.search(r"([\d,]+)\s*repost", counts_text, re.IGNORECASE)
                     if repost_match:
                         reposts = parse_count(repost_match.group(1))
+                    break
 
-                # Fallback: look for reaction count button
-                if likes == 0:
-                    reaction_btn = post_el.query_selector(
-                        "button.social-details-social-counts__reactions-count"
-                    )
-                    if reaction_btn:
-                        likes = parse_count(reaction_btn.inner_text())
+            # Fallback: reaction count button
+            if likes == 0:
+                reaction_btn = post_el.query_selector(
+                    "button.social-details-social-counts__reactions-count"
+                )
+                if reaction_btn:
+                    likes = parse_count(reaction_btn.inner_text())
 
-                posts.append(PostEngagement(
-                    post_url=post_url,
-                    text_preview=text_preview,
-                    likes=likes,
-                    comments=comments,
-                    reposts=reposts,
-                ))
-            except Exception as e:
-                log.debug(f"Error parsing post element: {e}")
-                continue
-    except Exception as e:
-        log.warning(f"Error scraping posts: {e}")
+            posts.append(PostEngagement(
+                post_url=post_url,
+                text_preview=text_preview,
+                likes=likes,
+                comments=comments,
+                reposts=reposts,
+            ))
+        except Exception as e:
+            log.debug(f"Error parsing post element: {e}")
+            continue
 
     return posts
 
@@ -259,7 +370,6 @@ def run_analyze(limit: int | None = None, headless: bool = False):
                 recent_posts = scrape_recent_posts(page, c.profile_url, limiter)
                 limiter.record("page_visit")
 
-                # Check if already connected
                 if profile_data.get("connection_status") == "connected":
                     status = CandidateStatus.ALREADY_CONNECTED
                 else:

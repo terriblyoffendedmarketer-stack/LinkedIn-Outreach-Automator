@@ -109,6 +109,37 @@ def cmd_pipeline(args):
     print("  4. Re-export: python3 main.py export")
 
 
+def cmd_reanalyze(args):
+    """Reset skipped/analyzed/failed candidates back to EXTRACTED so they can be re-scraped."""
+    candidates = load_state()
+    reset_statuses = {
+        CandidateStatus.SKIPPED,
+        CandidateStatus.ANALYZED,
+        CandidateStatus.ANALYZE_FAILED,
+        CandidateStatus.SCORED,
+    }
+    count = 0
+    for c in candidates:
+        if c.status in reset_statuses and c.profile_url:
+            c.status = CandidateStatus.EXTRACTED
+            c.headline = None
+            c.current_company = None
+            c.current_role = None
+            c.location = None
+            c.follower_count = None
+            c.connection_count = None
+            c.about_snippet = None
+            c.recent_posts = []
+            c.connection_status = None
+            c.score = None
+            c.score_breakdown = None
+            c.is_icp = None
+            c.score_reasoning = None
+            count += 1
+    save_state(candidates)
+    print(f"Reset {count} candidates back to EXTRACTED. Run 'analyze' to re-scrape them.")
+
+
 def cmd_skip(args):
     candidates = load_state()
     for c in candidates:
@@ -155,6 +186,8 @@ def main():
     p_pipeline.add_argument("--limit", type=int, default=None)
     p_pipeline.add_argument("--headless", action="store_true")
 
+    sub.add_parser("reanalyze", help="Reset skipped/analyzed candidates for re-scraping")
+
     p_skip = sub.add_parser("skip", help="Mark a candidate as skipped")
     p_skip.add_argument("candidate_id")
 
@@ -171,6 +204,7 @@ def main():
         "followup": cmd_followup,
         "export": cmd_export,
         "pipeline": cmd_pipeline,
+        "reanalyze": cmd_reanalyze,
         "skip": cmd_skip,
     }
     commands[args.command](args)
